@@ -336,7 +336,7 @@ static void bootloader_command_get(void) {
 static void bootloader_command_get_id(void) {
 
   uint32_t devID = LL_DBGMCU_GetDeviceID();
-  bootloader_send_ack();
+  //bootloader_send_ack(); TOOD: UNCLEAR WHY I NEED TO COMMENT IT. TEST WITH REAL BOARD
   bootloader_start_buffer(1); // Number of bytes to follow
   bootloader_send_char(devID >> 0x08);
   bootloader_end_buffer(devID & 0xFF);

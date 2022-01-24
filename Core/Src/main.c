@@ -50,6 +50,8 @@ typedef enum {
 #define BL_COMMAND_READOUT_PROTECT 0x82
 #define BL_COMMAND_READOUT_UNPROTECT 0x92
 
+#define BL_DEVICE_ID "URI-CRAP"
+
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -64,7 +66,10 @@ extern volatile uint32_t uwTick;
 bl_state blState;
 uint8_t rxChecksum;
 uint8_t rxByte1;
-uint32_t nextTimeout;
+volatile uint32_t nextTimeout;
+
+uint8_t debugBuffer[512];
+uint8_t debugBufferPos = 0;
 
 /* USER CODE END PV */
 
@@ -134,7 +139,7 @@ int main(void) {
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    if (uwTick >= nextTimeout)
+    if ((nextTimeout) && (uwTick >= nextTimeout))
       bootloader_reset_state();
   }
   /* USER CODE END 3 */
@@ -232,6 +237,7 @@ static void MX_USART4_UART_Init(void) {
   while ((!(LL_USART_IsActiveFlag_TEACK(USART4))) || (!(LL_USART_IsActiveFlag_REACK(USART4)))) {
   }
   /* USER CODE BEGIN USART4_Init 2 */
+  LL_USART_EnableIT_RXNE(USART4);
 
   /* USER CODE END USART4_Init 2 */
 
@@ -327,35 +333,56 @@ static void bootloader_command_get(void) {
   bootloader_reset_state();
 }
 
-static void bootloader_parse_command(uint8_t ch) {
+static void bootloader_command_get_id(void) {
+
+  uint32_t devID = LL_DBGMCU_GetDeviceID();
+  bootloader_send_ack();
+  bootloader_start_buffer(1); // Number of bytes to follow
+  bootloader_send_char(devID >> 0x08);
+  bootloader_end_buffer(devID & 0xFF);
+  bootloader_send_ack();
+
+  bootloader_reset_state();
+}
+
+static void bootloader_parse_command(uint8_t command) {
   if (rxChecksum != 0) {
     bootloader_send_nack();
     bootloader_reset_state();
     return;
   }
 
-  if (ch == BL_COMMAND_GET) {
-    bootloader_command_get();
-  } else {
-    bootloader_send_nack();
-    bootloader_reset_state();
+  switch (command) {
+    case BL_COMMAND_GET:
+      bootloader_command_get();
+      break;
+
+    case BL_COMMAND_GET_ID:
+      bootloader_command_get_id();
+      break;
+
+    default:
+      bootloader_send_nack();
+      bootloader_reset_state();
   }
 }
 
 void USART_CharReception_Callback(uint8_t ch) {
+  debugBuffer[debugBufferPos++] = ch;
   nextTimeout = uwTick + 10000;
   rxChecksum ^= ch;
   switch (blState) {
     case bsIdle:
       if (ch == 0x7F) {
         bootloader_send_ack();
+        bootloader_reset_state();
       } else {
         blState = bsWaitCommand2;
         rxByte1 = ch;
       }
       break;
     case bsWaitCommand2:
-      bootloader_parse_command(ch);
+      bootloader_parse_command(rxByte1);
       break;
   }
 }

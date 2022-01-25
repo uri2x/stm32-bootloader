@@ -49,6 +49,7 @@ typedef enum {
 #define BL_COMMAND_WRITE_UNPROTECT 0x73
 #define BL_COMMAND_READOUT_PROTECT 0x82
 #define BL_COMMAND_READOUT_UNPROTECT 0x92
+#define BL_COMMAND_SPECIAL 0x50
 
 #define BL_DEVICE_ID "URI-CRAP"
 
@@ -65,7 +66,7 @@ typedef enum {
 extern volatile uint32_t uwTick;
 bl_state blState;
 uint8_t rxChecksum;
-uint8_t rxByte1;
+uint8_t rxCmd;
 volatile uint32_t nextTimeout;
 
 uint8_t debugBuffer[512];
@@ -81,6 +82,8 @@ static void MX_USART4_UART_Init(void);
 static void consolePutString(char *sData);
 static void consolePutChar(uint8_t ch);
 static void bootloader_reset_state(void);
+static void bootloader_parse_command(uint8_t command);
+static void USART_CharReception_Callback(uint8_t ch);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -106,7 +109,6 @@ int main(void) {
 
   /* System interrupt init*/
   /* SysTick_IRQn interrupt configuration */
-  NVIC_SetPriority(SysTick_IRQn, 3);
 
   /** Disable the internal Pull-Up in Dead Battery pins of UCPD peripheral
    */
@@ -128,7 +130,7 @@ int main(void) {
   MX_USART4_UART_Init();
   /* USER CODE BEGIN 2 */
 
-  consolePutString("\r\nSTM32-BOOTLOADER " __DATE__ " " __TIME__ "\r\n");
+  NVIC_EnableIRQ(SysTick_IRQn);
   bootloader_reset_state();
 
   /* USER CODE END 2 */
@@ -139,8 +141,13 @@ int main(void) {
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    if ((nextTimeout) && (uwTick >= nextTimeout))
+    if ((nextTimeout) && (uwTick > nextTimeout))
       bootloader_reset_state();
+
+    if (LL_USART_IsActiveFlag_RXNE(USART4))
+      USART_CharReception_Callback(USART4->RDR);
+    else if (LL_USART_IsActiveFlag_ORE(USART4))
+      LL_USART_ClearFlag_ORE(USART4);
   }
   /* USER CODE END 3 */
 }
@@ -210,8 +217,6 @@ static void MX_USART4_UART_Init(void) {
   LL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
   /* USART4 interrupt Init */
-  NVIC_SetPriority(USART3_4_LPUART1_IRQn, 0);
-  NVIC_EnableIRQ(USART3_4_LPUART1_IRQn);
 
   /* USER CODE BEGIN USART4_Init 1 */
 
@@ -237,7 +242,6 @@ static void MX_USART4_UART_Init(void) {
   while ((!(LL_USART_IsActiveFlag_TEACK(USART4))) || (!(LL_USART_IsActiveFlag_REACK(USART4)))) {
   }
   /* USER CODE BEGIN USART4_Init 2 */
-  LL_USART_EnableIT_RXNE(USART4);
 
   /* USER CODE END USART4_Init 2 */
 
@@ -264,24 +268,41 @@ static void MX_GPIO_Init(void) {
   GPIO_InitStruct.OutputType = LL_GPIO_OUTPUT_PUSHPULL;
   GPIO_InitStruct.Pull = LL_GPIO_PULL_NO;
   LL_GPIO_Init(LED_GPIO_Port, &GPIO_InitStruct);
-
 }
 
 /* USER CODE BEGIN 4 */
+static void bootloader_reset_checksum(void) {
+  rxChecksum = 0xFF;
+}
+
+static uint8_t bootloader_get_char(void) {
+  while (!LL_USART_IsActiveFlag_RXNE(USART4))
+    ;
+  uint8_t ch = USART4->RDR;
+  debugBuffer[debugBufferPos++] = ch;
+  rxChecksum ^= ch;
+  return ch;
+}
+
 static void bootloader_send_char(uint8_t ch) {
   consolePutChar(ch);
   rxChecksum ^= ch;
 }
 
-static void bootloader_start_buffer(uint8_t ch) {
-  rxChecksum = 0xFF;
-  bootloader_send_char(ch);
-}
-
-static void bootloader_end_buffer(uint8_t ch) {
+static void bootloader_sendsingle(uint8_t ch) {
+  bootloader_reset_checksum();
   bootloader_send_char(ch);
   consolePutChar(rxChecksum);
-  rxChecksum = 0xFF;
+  bootloader_reset_checksum();
+}
+
+static void bootloader_start_buffer(void) {
+  bootloader_reset_checksum();
+}
+
+static void bootloader_end_buffer(void) {
+  consolePutChar(rxChecksum);
+  bootloader_reset_checksum();
 }
 
 static void consolePutChar(uint8_t ch) {
@@ -301,7 +322,7 @@ static void consolePutString(char *sData) {
 
 static void bootloader_reset_state(void) {
   blState = bsIdle;
-  rxChecksum = 0xFF;
+  bootloader_reset_checksum();
   nextTimeout = 0;
 }
 
@@ -315,8 +336,9 @@ static void bootloader_send_nack(void) {
 
 static void bootloader_command_get(void) {
   bootloader_send_ack();
-  bootloader_start_buffer(11); // Number of bytes to follow
-  bootloader_send_char(0x10); // Bootloader version
+  bootloader_start_buffer();
+  bootloader_send_char(11); // Number of bytes to follow
+  bootloader_send_char(0x33); // Bootloader version
   bootloader_send_char(BL_COMMAND_GET);
   bootloader_send_char(BL_COMMAND_GET_VERSION_AND_READ_PROTECTION);
   bootloader_send_char(BL_COMMAND_GET_ID);
@@ -327,8 +349,9 @@ static void bootloader_command_get(void) {
   bootloader_send_char(BL_COMMAND_WRITE_PROTECT);
   bootloader_send_char(BL_COMMAND_WRITE_UNPROTECT);
   bootloader_send_char(BL_COMMAND_READOUT_PROTECT);
-  bootloader_end_buffer(BL_COMMAND_READOUT_UNPROTECT);
-  bootloader_send_ack();
+  bootloader_send_char(BL_COMMAND_READOUT_UNPROTECT);
+  bootloader_end_buffer();
+  //bootloader_send_ack();
 
   bootloader_reset_state();
 }
@@ -336,20 +359,81 @@ static void bootloader_command_get(void) {
 static void bootloader_command_get_id(void) {
 
   uint32_t devID = LL_DBGMCU_GetDeviceID();
-  //bootloader_send_ack(); TOOD: UNCLEAR WHY I NEED TO COMMENT IT. TEST WITH REAL BOARD
-  bootloader_start_buffer(1); // Number of bytes to follow
-  bootloader_send_char(devID >> 0x08);
-  bootloader_end_buffer(devID & 0xFF);
   bootloader_send_ack();
+  bootloader_start_buffer();
+  bootloader_send_char(1); // Number of bytes to follow
+  bootloader_send_char(devID >> 0x08);
+  bootloader_send_char(devID & 0xFF);
+  bootloader_end_buffer();
+  //bootloader_send_ack();
+
+  bootloader_reset_state();
+}
+
+static void bootloader_command_special(void) {
+  uint8_t uid0 = LL_GetUID_Word0();
+  uint8_t uid1 = LL_GetUID_Word1();
+  uint8_t uid2 = LL_GetUID_Word2();
+  bootloader_send_ack();
+  bootloader_start_buffer();
+  bootloader_send_char(uid2 >> 0x18);
+  bootloader_send_char(uid2 >> 0x10);
+  bootloader_send_char(uid2 >> 0x08);
+  bootloader_send_char(uid2);
+  bootloader_end_buffer();
+  //bootloader_get_char();
+  //bootloader_get_char();
+
+  bootloader_reset_state();
+  //bootloader_send_ack();
+}
+
+static void bootloader_command_read_memory(void) {
+// First I need to test for RDP. For now - I ignore it
+  uint32_t addr = 0;
+  uint16_t readSize;
+  bootloader_reset_checksum();
+  bootloader_send_ack();
+  for (uint8_t i = 0; i < 4; i++)
+    addr = (addr << 0x08) | bootloader_get_char();
+
+  bootloader_get_char();
+
+  if (rxChecksum != 0xFF) { // Unclear why it's FF and not zero
+    bootloader_reset_state();
+    bootloader_send_nack();
+    return;
+  }
+
+  bootloader_send_ack();
+
+  bootloader_reset_checksum();
+  readSize = bootloader_get_char();
+  bootloader_get_char();
+  if (rxChecksum) {
+    bootloader_reset_state();
+    bootloader_send_nack();
+    return;
+  }
+  bootloader_send_ack();
+
+  uint8_t *memAddr = (uint8_t*) addr;
+  bootloader_start_buffer();
+  for (uint16_t i = 0; i <= readSize; i++) {
+    bootloader_send_char(*memAddr);
+
+    memAddr++;
+  }
+  //bootloader_end_buffer();
 
   bootloader_reset_state();
 }
 
 static void bootloader_parse_command(uint8_t command) {
-  if (rxChecksum != 0) {
+  rxCmd = 0;
+  if (rxChecksum) {
     bootloader_send_nack();
     bootloader_reset_state();
-    return;
   }
 
   switch (command) {
@@ -361,13 +445,22 @@ static void bootloader_parse_command(uint8_t command) {
       bootloader_command_get_id();
       break;
 
+    case BL_COMMAND_READ_MEMORY:
+      bootloader_command_read_memory();
+      break;
+
+    case BL_COMMAND_SPECIAL:
+      bootloader_command_special();
+      break;
+
     default:
       bootloader_send_nack();
       bootloader_reset_state();
+      break;
   }
 }
 
-void USART_CharReception_Callback(uint8_t ch) {
+static void USART_CharReception_Callback(uint8_t ch) {
   debugBuffer[debugBufferPos++] = ch;
   nextTimeout = uwTick + 10000;
   rxChecksum ^= ch;
@@ -377,12 +470,13 @@ void USART_CharReception_Callback(uint8_t ch) {
         bootloader_send_ack();
         bootloader_reset_state();
       } else {
+        rxCmd = ch;
         blState = bsWaitCommand2;
-        rxByte1 = ch;
       }
       break;
+
     case bsWaitCommand2:
-      bootloader_parse_command(rxByte1);
+      bootloader_parse_command(rxCmd);
       break;
   }
 }

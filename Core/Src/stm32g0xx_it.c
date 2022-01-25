@@ -143,13 +143,6 @@ void USART3_4_LPUART1_IRQHandler(void) {
   /* USER CODE END USART3_4_LPUART1_IRQn 0 */
 
   /* USER CODE BEGIN USART3_4_LPUART1_IRQn 1 */
-  if (LL_USART_IsActiveFlag_RXNE(USART4) && LL_USART_IsEnabledIT_RXNE(USART4)) {
-    /* RXNE flag will be cleared by reading of RDR register (done in call) */
-    /* Call function in charge of handling Character reception */
-    USART_CharReception_Callback(LL_USART_ReceiveData8(USART4));
-  } else {
-    USART4->ICR = USART4->ISR;
-  }
   /* USER CODE END USART3_4_LPUART1_IRQn 1 */
 }
 

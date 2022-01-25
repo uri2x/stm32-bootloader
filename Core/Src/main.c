@@ -21,37 +21,17 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "bootloader.h"
 
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-typedef enum {
-  bsIdle, bsWaitCommand2
-} bl_state;
 
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define BL_COMMAND_ACK 0x79
-#define BL_COMMAND_NACK 0x1F
-
-#define BL_COMMAND_GET 0x00
-#define BL_COMMAND_GET_VERSION_AND_READ_PROTECTION 0x01
-#define BL_COMMAND_GET_ID 0x02
-#define BL_COMMAND_READ_MEMORY 0x11
-#define BL_COMMAND_GO 0x21
-#define BL_COMMAND_WRITE_MEMORY 0x31
-#define BL_COMMAND_ERASE 0x43
-#define BL_COMMAND_EXTENDED_ERASE 0x44
-#define BL_COMMAND_WRITE_PROTECT 0x63
-#define BL_COMMAND_WRITE_UNPROTECT 0x73
-#define BL_COMMAND_READOUT_PROTECT 0x82
-#define BL_COMMAND_READOUT_UNPROTECT 0x92
-#define BL_COMMAND_SPECIAL 0x50
-
-#define BL_DEVICE_ID "URI-CRAP"
 
 /* USER CODE END PD */
 
@@ -61,16 +41,9 @@ typedef enum {
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
+UART_HandleTypeDef huart4;
 
 /* USER CODE BEGIN PV */
-extern volatile uint32_t uwTick;
-bl_state blState;
-uint8_t rxChecksum;
-uint8_t rxCmd;
-volatile uint32_t nextTimeout;
-
-uint8_t debugBuffer[512];
-uint8_t debugBufferPos = 0;
 
 /* USER CODE END PV */
 
@@ -79,11 +52,7 @@ void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_USART4_UART_Init(void);
 /* USER CODE BEGIN PFP */
-static void consolePutString(char *sData);
-static void consolePutChar(uint8_t ch);
-static void bootloader_reset_state(void);
-static void bootloader_parse_command(uint8_t command);
-static void USART_CharReception_Callback(uint8_t ch);
+
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -103,16 +72,7 @@ int main(void) {
   /* MCU Configuration--------------------------------------------------------*/
 
   /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
-
-  LL_APB2_GRP1_EnableClock(LL_APB2_GRP1_PERIPH_SYSCFG);
-  LL_APB1_GRP1_EnableClock(LL_APB1_GRP1_PERIPH_PWR);
-
-  /* System interrupt init*/
-  /* SysTick_IRQn interrupt configuration */
-
-  /** Disable the internal Pull-Up in Dead Battery pins of UCPD peripheral
-   */
-  LL_SYSCFG_DisableDBATT(LL_SYSCFG_UCPD1_STROBE | LL_SYSCFG_UCPD2_STROBE);
+  HAL_Init();
 
   /* USER CODE BEGIN Init */
 
@@ -130,25 +90,17 @@ int main(void) {
   MX_USART4_UART_Init();
   /* USER CODE BEGIN 2 */
 
-  NVIC_EnableIRQ(SysTick_IRQn);
-  bootloader_reset_state();
-
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-  while (1) {
-    /* USER CODE END WHILE */
+  if (HAL_GPIO_ReadPin(ACC_GPIO_Port, ACC_Pin))
+    bootloader_start_user_program();
+  else
+    bootloader_loop(&huart4);
+  /* USER CODE END WHILE */
 
-    /* USER CODE BEGIN 3 */
-    if ((nextTimeout) && (uwTick > nextTimeout))
-      bootloader_reset_state();
-
-    if (LL_USART_IsActiveFlag_RXNE(USART4))
-      USART_CharReception_Callback(USART4->RDR);
-    else if (LL_USART_IsActiveFlag_ORE(USART4))
-      LL_USART_ClearFlag_ORE(USART4);
-  }
+  /* USER CODE BEGIN 3 */
   /* USER CODE END 3 */
 }
 
@@ -157,24 +109,33 @@ int main(void) {
  * @retval None
  */
 void SystemClock_Config(void) {
-  /* HSI configuration and activation */
-  LL_RCC_HSI_Enable();
-  while (LL_RCC_HSI_IsReady() != 1) {
+  RCC_OscInitTypeDef RCC_OscInitStruct = { 0 };
+  RCC_ClkInitTypeDef RCC_ClkInitStruct = { 0 };
+
+  /** Configure the main internal regulator output voltage
+   */
+  HAL_PWREx_ControlVoltageScaling(PWR_REGULATOR_VOLTAGE_SCALE1);
+  /** Initializes the RCC Oscillators according to the specified parameters
+   * in the RCC_OscInitTypeDef structure.
+   */
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
+  RCC_OscInitStruct.HSIState = RCC_HSI_ON;
+  RCC_OscInitStruct.HSIDiv = RCC_HSI_DIV1;
+  RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
+  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_NONE;
+  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK) {
+    Error_Handler();
   }
+  /** Initializes the CPU, AHB and APB buses clocks
+   */
+  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK | RCC_CLOCKTYPE_SYSCLK | RCC_CLOCKTYPE_PCLK1;
+  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_HSI;
+  RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
+  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV1;
 
-  /* Set AHB prescaler*/
-  LL_RCC_SetAHBPrescaler(LL_RCC_SYSCLK_DIV_1);
-
-  /* Sysclk activation on the HSI */
-  LL_RCC_SetSysClkSource(LL_RCC_SYS_CLKSOURCE_HSI);
-  while (LL_RCC_GetSysClkSource() != LL_RCC_SYS_CLKSOURCE_STATUS_HSI) {
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_0) != HAL_OK) {
+    Error_Handler();
   }
-
-  /* Set APB1 prescaler*/
-  LL_RCC_SetAPB1Prescaler(LL_RCC_APB1_DIV_1);
-  LL_Init1msTick(16000000);
-  /* Update CMSIS variable (which can be updated also through SystemCoreClockUpdate function) */
-  LL_SetSystemCoreClock(16000000);
 }
 
 /**
@@ -188,58 +149,22 @@ static void MX_USART4_UART_Init(void) {
 
   /* USER CODE END USART4_Init 0 */
 
-  LL_USART_InitTypeDef USART_InitStruct = { 0 };
-
-  LL_GPIO_InitTypeDef GPIO_InitStruct = { 0 };
-
-  /* Peripheral clock enable */
-  LL_APB1_GRP1_EnableClock(LL_APB1_GRP1_PERIPH_USART4);
-
-  LL_IOP_GRP1_EnableClock(LL_IOP_GRP1_PERIPH_GPIOA);
-  /**USART4 GPIO Configuration
-   PA0   ------> USART4_TX
-   PA1   ------> USART4_RX
-   */
-  GPIO_InitStruct.Pin = LL_GPIO_PIN_0;
-  GPIO_InitStruct.Mode = LL_GPIO_MODE_ALTERNATE;
-  GPIO_InitStruct.Speed = LL_GPIO_SPEED_FREQ_LOW;
-  GPIO_InitStruct.OutputType = LL_GPIO_OUTPUT_PUSHPULL;
-  GPIO_InitStruct.Pull = LL_GPIO_PULL_NO;
-  GPIO_InitStruct.Alternate = LL_GPIO_AF_4;
-  LL_GPIO_Init(GPIOA, &GPIO_InitStruct);
-
-  GPIO_InitStruct.Pin = LL_GPIO_PIN_1;
-  GPIO_InitStruct.Mode = LL_GPIO_MODE_ALTERNATE;
-  GPIO_InitStruct.Speed = LL_GPIO_SPEED_FREQ_LOW;
-  GPIO_InitStruct.OutputType = LL_GPIO_OUTPUT_PUSHPULL;
-  GPIO_InitStruct.Pull = LL_GPIO_PULL_NO;
-  GPIO_InitStruct.Alternate = LL_GPIO_AF_4;
-  LL_GPIO_Init(GPIOA, &GPIO_InitStruct);
-
-  /* USART4 interrupt Init */
-
   /* USER CODE BEGIN USART4_Init 1 */
 
   /* USER CODE END USART4_Init 1 */
-  USART_InitStruct.PrescalerValue = LL_USART_PRESCALER_DIV1;
-  USART_InitStruct.BaudRate = 115200;
-  USART_InitStruct.DataWidth = LL_USART_DATAWIDTH_8B;
-  USART_InitStruct.StopBits = LL_USART_STOPBITS_1;
-  USART_InitStruct.Parity = LL_USART_PARITY_NONE;
-  USART_InitStruct.TransferDirection = LL_USART_DIRECTION_TX_RX;
-  USART_InitStruct.HardwareFlowControl = LL_USART_HWCONTROL_NONE;
-  USART_InitStruct.OverSampling = LL_USART_OVERSAMPLING_16;
-  LL_USART_Init(USART4, &USART_InitStruct);
-  LL_USART_ConfigAsyncMode(USART4);
-
-  /* USER CODE BEGIN WKUPType USART4 */
-
-  /* USER CODE END WKUPType USART4 */
-
-  LL_USART_Enable(USART4);
-
-  /* Polling USART4 initialisation */
-  while ((!(LL_USART_IsActiveFlag_TEACK(USART4))) || (!(LL_USART_IsActiveFlag_REACK(USART4)))) {
+  huart4.Instance = USART4;
+  huart4.Init.BaudRate = 115200;
+  huart4.Init.WordLength = UART_WORDLENGTH_8B;
+  huart4.Init.StopBits = UART_STOPBITS_1;
+  huart4.Init.Parity = UART_PARITY_NONE;
+  huart4.Init.Mode = UART_MODE_TX_RX;
+  huart4.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart4.Init.OverSampling = UART_OVERSAMPLING_16;
+  huart4.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
+  huart4.Init.ClockPrescaler = UART_PRESCALER_DIV1;
+  huart4.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
+  if (HAL_UART_Init(&huart4) != HAL_OK) {
+    Error_Handler();
   }
   /* USER CODE BEGIN USART4_Init 2 */
 
@@ -253,233 +178,21 @@ static void MX_USART4_UART_Init(void) {
  * @retval None
  */
 static void MX_GPIO_Init(void) {
-  LL_GPIO_InitTypeDef GPIO_InitStruct = { 0 };
+  GPIO_InitTypeDef GPIO_InitStruct = { 0 };
 
   /* GPIO Ports Clock Enable */
-  LL_IOP_GRP1_EnableClock(LL_IOP_GRP1_PERIPH_GPIOA);
+  __HAL_RCC_GPIOA_CLK_ENABLE();
+  __HAL_RCC_GPIOD_CLK_ENABLE();
 
-  /**/
-  LL_GPIO_ResetOutputPin(LED_GPIO_Port, LED_Pin);
+  /*Configure GPIO pin : ACC_Pin */
+  GPIO_InitStruct.Pin = ACC_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(ACC_GPIO_Port, &GPIO_InitStruct);
 
-  /**/
-  GPIO_InitStruct.Pin = LED_Pin;
-  GPIO_InitStruct.Mode = LL_GPIO_MODE_OUTPUT;
-  GPIO_InitStruct.Speed = LL_GPIO_SPEED_FREQ_LOW;
-  GPIO_InitStruct.OutputType = LL_GPIO_OUTPUT_PUSHPULL;
-  GPIO_InitStruct.Pull = LL_GPIO_PULL_NO;
-  LL_GPIO_Init(LED_GPIO_Port, &GPIO_InitStruct);
 }
 
 /* USER CODE BEGIN 4 */
-static void bootloader_reset_checksum(void) {
-  rxChecksum = 0xFF;
-}
-
-static uint8_t bootloader_get_char(void) {
-  while (!LL_USART_IsActiveFlag_RXNE(USART4))
-    ;
-  uint8_t ch = USART4->RDR;
-  debugBuffer[debugBufferPos++] = ch;
-  rxChecksum ^= ch;
-  return ch;
-}
-
-static void bootloader_send_char(uint8_t ch) {
-  consolePutChar(ch);
-  rxChecksum ^= ch;
-}
-
-static void bootloader_sendsingle(uint8_t ch) {
-  bootloader_reset_checksum();
-  bootloader_send_char(ch);
-  consolePutChar(rxChecksum);
-  bootloader_reset_checksum();
-}
-
-static void bootloader_start_buffer(void) {
-  bootloader_reset_checksum();
-}
-
-static void bootloader_end_buffer(void) {
-  consolePutChar(rxChecksum);
-  bootloader_reset_checksum();
-}
-
-static void consolePutChar(uint8_t ch) {
-  while (!LL_USART_IsActiveFlag_TXE(USART4))
-    ;
-
-  LL_USART_TransmitData8(USART4, ch);
-}
-
-static void consolePutString(char *sData) {
-  while (*sData)
-    consolePutChar((char) *sData++);
-
-  while (!LL_USART_IsActiveFlag_TC(USART4))
-    ;
-}
-
-static void bootloader_reset_state(void) {
-  blState = bsIdle;
-  bootloader_reset_checksum();
-  nextTimeout = 0;
-}
-
-static void bootloader_send_ack(void) {
-  consolePutChar(BL_COMMAND_ACK);
-}
-
-static void bootloader_send_nack(void) {
-  consolePutChar(BL_COMMAND_NACK);
-}
-
-static void bootloader_command_get(void) {
-  bootloader_send_ack();
-  bootloader_start_buffer();
-  bootloader_send_char(11); // Number of bytes to follow
-  bootloader_send_char(0x33); // Bootloader version
-  bootloader_send_char(BL_COMMAND_GET);
-  bootloader_send_char(BL_COMMAND_GET_VERSION_AND_READ_PROTECTION);
-  bootloader_send_char(BL_COMMAND_GET_ID);
-  bootloader_send_char(BL_COMMAND_READ_MEMORY);
-  bootloader_send_char(BL_COMMAND_GO);
-  bootloader_send_char(BL_COMMAND_WRITE_MEMORY);
-  bootloader_send_char(BL_COMMAND_ERASE);
-  bootloader_send_char(BL_COMMAND_WRITE_PROTECT);
-  bootloader_send_char(BL_COMMAND_WRITE_UNPROTECT);
-  bootloader_send_char(BL_COMMAND_READOUT_PROTECT);
-  bootloader_send_char(BL_COMMAND_READOUT_UNPROTECT);
-  bootloader_end_buffer();
-  //bootloader_send_ack();
-
-  bootloader_reset_state();
-}
-
-static void bootloader_command_get_id(void) {
-
-  uint32_t devID = LL_DBGMCU_GetDeviceID();
-  bootloader_send_ack();
-  bootloader_start_buffer();
-  bootloader_send_char(1); // Number of bytes to follow
-  bootloader_send_char(devID >> 0x08);
-  bootloader_send_char(devID & 0xFF);
-  bootloader_end_buffer();
-  //bootloader_send_ack();
-
-  bootloader_reset_state();
-}
-
-static void bootloader_command_special(void) {
-  uint8_t uid0 = LL_GetUID_Word0();
-  uint8_t uid1 = LL_GetUID_Word1();
-  uint8_t uid2 = LL_GetUID_Word2();
-  bootloader_send_ack();
-  bootloader_start_buffer();
-  bootloader_send_char(uid2 >> 0x18);
-  bootloader_send_char(uid2 >> 0x10);
-  bootloader_send_char(uid2 >> 0x08);
-  bootloader_send_char(uid2);
-  bootloader_end_buffer();
-  //bootloader_get_char();
-  //bootloader_get_char();
-
-  bootloader_reset_state();
-  //bootloader_send_ack();
-}
-
-static void bootloader_command_read_memory(void) {
-// First I need to test for RDP. For now - I ignore it
-  uint32_t addr = 0;
-  uint16_t readSize;
-  bootloader_reset_checksum();
-  bootloader_send_ack();
-  for (uint8_t i = 0; i < 4; i++)
-    addr = (addr << 0x08) | bootloader_get_char();
-
-  bootloader_get_char();
-
-  if (rxChecksum != 0xFF) { // Unclear why it's FF and not zero
-    bootloader_reset_state();
-    bootloader_send_nack();
-    return;
-  }
-
-  bootloader_send_ack();
-
-  bootloader_reset_checksum();
-  readSize = bootloader_get_char();
-  bootloader_get_char();
-  if (rxChecksum) {
-    bootloader_reset_state();
-    bootloader_send_nack();
-    return;
-  }
-  bootloader_send_ack();
-
-  uint8_t *memAddr = (uint8_t*) addr;
-  bootloader_start_buffer();
-  for (uint16_t i = 0; i <= readSize; i++) {
-    bootloader_send_char(*memAddr);
-
-    memAddr++;
-  }
-  //bootloader_end_buffer();
-
-  bootloader_reset_state();
-}
-
-static void bootloader_parse_command(uint8_t command) {
-  rxCmd = 0;
-  if (rxChecksum) {
-    bootloader_send_nack();
-    bootloader_reset_state();
-  }
-
-  switch (command) {
-    case BL_COMMAND_GET:
-      bootloader_command_get();
-      break;
-
-    case BL_COMMAND_GET_ID:
-      bootloader_command_get_id();
-      break;
-
-    case BL_COMMAND_READ_MEMORY:
-      bootloader_command_read_memory();
-      break;
-
-    case BL_COMMAND_SPECIAL:
-      bootloader_command_special();
-      break;
-
-    default:
-      bootloader_send_nack();
-      bootloader_reset_state();
-      break;
-  }
-}
-
-static void USART_CharReception_Callback(uint8_t ch) {
-  debugBuffer[debugBufferPos++] = ch;
-  nextTimeout = uwTick + 10000;
-  rxChecksum ^= ch;
-  switch (blState) {
-    case bsIdle:
-      if (ch == 0x7F) {
-        bootloader_send_ack();
-        bootloader_reset_state();
-      } else {
-        rxCmd = ch;
-        blState = bsWaitCommand2;
-      }
-      break;
-
-    case bsWaitCommand2:
-      bootloader_parse_command(rxCmd);
-      break;
-  }
-}
 
 /* USER CODE END 4 */
 

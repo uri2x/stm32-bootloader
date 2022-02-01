@@ -25,7 +25,7 @@ typedef enum {
 
 /* Private define ------------------------------------------------------------*/
 #define APP_ADDRESS 0x8003000
-#define BOOTLOADER_TIMEOUT_SECONDS 10
+#define BOOTLOADER_TIMEOUT_SECONDS 30
 
 #define BL_COMMAND_ACK 0x79
 #define BL_COMMAND_NACK 0x1F
@@ -42,6 +42,8 @@ typedef enum {
 #define BL_COMMAND_WRITE_UNPROTECT 0x73
 #define BL_COMMAND_READOUT_PROTECT 0x82
 #define BL_COMMAND_READOUT_UNPROTECT 0x92
+
+#define BL_COMMAND_CUSTOM_JUMP 0x3F // '?'
 
 static bl_state blState;
 static uint8_t rxChecksum;
@@ -414,6 +416,8 @@ static void USART_CharReception_Callback(uint8_t ch) {
       if (ch == 0x7F) {
         bootloader_send_ack();
         bootloader_reset_state();
+      } else if (ch == BL_COMMAND_CUSTOM_JUMP) {
+        bootloader_start_user_program();
       } else {
         rxCmd = ch;
         blState = bsWaitCommand2;
@@ -434,12 +438,12 @@ void bootloader_loop(UART_HandleTypeDef *uart) {
   bootloader_uart = uart;
   bootloader_reset_state();
 
-  const uint8_t *about = (uint8_t *)"STM32 BOOTLOADER " __DATE__ " " __TIME__ "\r\n";
-  for (uint8_t i=0;about[i];i++)
+  const uint8_t *about = (uint8_t*) "STM32 BOOTLOADER-NG " __DATE__ " " __TIME__ "\r\n";
+  for (uint8_t i = 0; about[i]; i++)
     bootloader_uart_send(about[i]);
 
   uint32_t lastAction = HAL_GetTick();
-  while (HAL_GetTick() < lastAction + (BOOTLOADER_TIMEOUT_SECONDS*1000)) {
+  while (HAL_GetTick() < lastAction + (BOOTLOADER_TIMEOUT_SECONDS * 1000)) {
     uint8_t ch;
     if (HAL_UART_Receive(bootloader_uart, &ch, 1, 5000) == HAL_OK) {
       lastAction = HAL_GetTick();

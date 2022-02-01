@@ -82,22 +82,31 @@ int main(void) {
   SystemClock_Config();
 
   /* USER CODE BEGIN SysInit */
+  uwTick = 0;
+  while (HAL_GetTick() < 300)
+    ;
 
   /* USER CODE END SysInit */
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
-  MX_USART4_UART_Init();
   /* USER CODE BEGIN 2 */
+  uint8_t bl_forced = HAL_GPIO_ReadPin(FORCE_BL_GPIO_Port, FORCE_BL_Pin);
+  HAL_GPIO_DeInit(FORCE_BL_GPIO_Port, FORCE_BL_Pin);
 
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-  if (HAL_GPIO_ReadPin(ACC_GPIO_Port, ACC_Pin))
-    bootloader_start_user_program();
-  else
+  if (bl_forced == 0) {
+    MX_USART4_UART_Init();
     bootloader_loop(&huart4);
+  }
+
+  // Reset GPIO to initial state
+
+  bootloader_start_user_program();
+
   /* USER CODE END WHILE */
 
   /* USER CODE BEGIN 3 */
@@ -182,13 +191,12 @@ static void MX_GPIO_Init(void) {
 
   /* GPIO Ports Clock Enable */
   __HAL_RCC_GPIOA_CLK_ENABLE();
-  __HAL_RCC_GPIOD_CLK_ENABLE();
 
-  /*Configure GPIO pin : ACC_Pin */
-  GPIO_InitStruct.Pin = ACC_Pin;
+  /*Configure GPIO pin : FORCE_BL_Pin */
+  GPIO_InitStruct.Pin = FORCE_BL_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(ACC_GPIO_Port, &GPIO_InitStruct);
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
+  HAL_GPIO_Init(FORCE_BL_GPIO_Port, &GPIO_InitStruct);
 
 }
 

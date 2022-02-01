@@ -25,6 +25,7 @@ typedef enum {
 
 /* Private define ------------------------------------------------------------*/
 #define APP_ADDRESS 0x8003000
+#define BOOTLOADER_TIMEOUT_SECONDS 10
 
 #define BL_COMMAND_ACK 0x79
 #define BL_COMMAND_NACK 0x1F
@@ -46,7 +47,7 @@ static bl_state blState;
 static uint8_t rxChecksum;
 static uint8_t rxCmd;
 
-static void consolePutChar(uint8_t ch);
+static void bootloader_uart_send(uint8_t ch);
 static void bootloader_reset_state(void);
 static void bootloader_parse_command(uint8_t command);
 static void USART_CharReception_Callback(uint8_t ch);
@@ -131,12 +132,12 @@ static uint32_t bootloader_get_uint32(void) {
   return retval;
 }
 
-static void consolePutChar(uint8_t ch) {
+static void bootloader_uart_send(uint8_t ch) {
   HAL_UART_Transmit(bootloader_uart, &ch, 1, 10000);
 }
 
 static void bootloader_send_char(uint8_t ch) {
-  consolePutChar(ch);
+  bootloader_uart_send(ch);
   rxChecksum ^= ch;
 }
 
@@ -145,16 +146,16 @@ static void bootloader_start_buffer(void) {
 }
 
 static void bootloader_end_buffer(void) {
-  consolePutChar(rxChecksum);
+  bootloader_uart_send(rxChecksum);
   bootloader_reset_checksum();
 }
 
 static void bootloader_send_ack(void) {
-  consolePutChar(BL_COMMAND_ACK);
+  bootloader_uart_send(BL_COMMAND_ACK);
 }
 
 static void bootloader_send_nack(void) {
-  consolePutChar(BL_COMMAND_NACK);
+  bootloader_uart_send(BL_COMMAND_NACK);
 }
 
 static void bootloader_nack_reset(void) {
@@ -433,11 +434,18 @@ void bootloader_loop(UART_HandleTypeDef *uart) {
   bootloader_uart = uart;
   bootloader_reset_state();
 
-  while (1) {
+  const uint8_t *about = (uint8_t *)"STM32 BOOTLOADER " __DATE__ " " __TIME__ "\r\n";
+  for (uint8_t i=0;about[i];i++)
+    bootloader_uart_send(about[i]);
+
+  uint32_t lastAction = HAL_GetTick();
+  while (HAL_GetTick() < lastAction + (BOOTLOADER_TIMEOUT_SECONDS*1000)) {
     uint8_t ch;
-    if (HAL_UART_Receive(bootloader_uart, &ch, 1, 10000) == HAL_OK)
+    if (HAL_UART_Receive(bootloader_uart, &ch, 1, 5000) == HAL_OK) {
+      lastAction = HAL_GetTick();
       USART_CharReception_Callback(ch);
-    else
+    } else {
       bootloader_reset_state();
+    }
   }
 }

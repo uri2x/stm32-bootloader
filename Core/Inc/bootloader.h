@@ -5,7 +5,7 @@
 extern "C" {
 #endif
 
-extern void bootloader_loop(UART_HandleTypeDef *uart);
+extern void bootloader_loop(USART_TypeDef *uart);
 extern void bootloader_start_user_program(void);
 
 #ifdef __cplusplus

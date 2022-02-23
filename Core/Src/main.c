@@ -41,7 +41,6 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
-UART_HandleTypeDef huart4;
 
 /* USER CODE BEGIN PV */
 
@@ -52,7 +51,7 @@ void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_USART4_UART_Init(void);
 /* USER CODE BEGIN PFP */
-
+static void MX_GPIO_DeInit(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -90,9 +89,11 @@ int main(void) {
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+
   /* USER CODE BEGIN 2 */
-  uint8_t bl_forced = HAL_GPIO_ReadPin(FORCE_BL_GPIO_Port, FORCE_BL_Pin);
-  HAL_GPIO_DeInit(FORCE_BL_GPIO_Port, FORCE_BL_Pin);
+
+  uint8_t bl_forced = LL_GPIO_IsInputPinSet(FORCE_BL_GPIO_Port, FORCE_BL_Pin);
+  MX_GPIO_DeInit();
 
   /* USER CODE END 2 */
 
@@ -100,10 +101,8 @@ int main(void) {
   /* USER CODE BEGIN WHILE */
   if (bl_forced == 0) {
     MX_USART4_UART_Init();
-    bootloader_loop(&huart4);
+    bootloader_loop(USART4);
   }
-
-  // Reset GPIO to initial state
 
   bootloader_start_user_program();
 
@@ -158,22 +157,56 @@ static void MX_USART4_UART_Init(void) {
 
   /* USER CODE END USART4_Init 0 */
 
+  LL_USART_InitTypeDef USART_InitStruct = { 0 };
+
+  LL_GPIO_InitTypeDef GPIO_InitStruct = { 0 };
+
+  /* Peripheral clock enable */
+  LL_APB1_GRP1_EnableClock(LL_APB1_GRP1_PERIPH_USART4);
+
+  LL_IOP_GRP1_EnableClock(LL_IOP_GRP1_PERIPH_GPIOA);
+  /**USART4 GPIO Configuration
+   PA0   ------> USART4_TX
+   PA1   ------> USART4_RX
+   */
+  GPIO_InitStruct.Pin = LL_GPIO_PIN_0;
+  GPIO_InitStruct.Mode = LL_GPIO_MODE_ALTERNATE;
+  GPIO_InitStruct.Speed = LL_GPIO_SPEED_FREQ_LOW;
+  GPIO_InitStruct.OutputType = LL_GPIO_OUTPUT_PUSHPULL;
+  GPIO_InitStruct.Pull = LL_GPIO_PULL_NO;
+  GPIO_InitStruct.Alternate = LL_GPIO_AF_4;
+  LL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+  GPIO_InitStruct.Pin = LL_GPIO_PIN_1;
+  GPIO_InitStruct.Mode = LL_GPIO_MODE_ALTERNATE;
+  GPIO_InitStruct.Speed = LL_GPIO_SPEED_FREQ_LOW;
+  GPIO_InitStruct.OutputType = LL_GPIO_OUTPUT_PUSHPULL;
+  GPIO_InitStruct.Pull = LL_GPIO_PULL_NO;
+  GPIO_InitStruct.Alternate = LL_GPIO_AF_4;
+  LL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
   /* USER CODE BEGIN USART4_Init 1 */
 
   /* USER CODE END USART4_Init 1 */
-  huart4.Instance = USART4;
-  huart4.Init.BaudRate = 115200;
-  huart4.Init.WordLength = UART_WORDLENGTH_8B;
-  huart4.Init.StopBits = UART_STOPBITS_1;
-  huart4.Init.Parity = UART_PARITY_EVEN;
-  huart4.Init.Mode = UART_MODE_TX_RX;
-  huart4.Init.HwFlowCtl = UART_HWCONTROL_NONE;
-  huart4.Init.OverSampling = UART_OVERSAMPLING_16;
-  huart4.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
-  huart4.Init.ClockPrescaler = UART_PRESCALER_DIV1;
-  huart4.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
-  if (HAL_UART_Init(&huart4) != HAL_OK) {
-    Error_Handler();
+  USART_InitStruct.PrescalerValue = LL_USART_PRESCALER_DIV1;
+  USART_InitStruct.BaudRate = 115200;
+  USART_InitStruct.DataWidth = LL_USART_DATAWIDTH_9B;
+  USART_InitStruct.StopBits = LL_USART_STOPBITS_1;
+  USART_InitStruct.Parity = LL_USART_PARITY_EVEN;
+  USART_InitStruct.TransferDirection = LL_USART_DIRECTION_TX_RX;
+  USART_InitStruct.HardwareFlowControl = LL_USART_HWCONTROL_NONE;
+  USART_InitStruct.OverSampling = LL_USART_OVERSAMPLING_16;
+  LL_USART_Init(USART4, &USART_InitStruct);
+  LL_USART_ConfigAsyncMode(USART4);
+
+  /* USER CODE BEGIN WKUPType USART4 */
+
+  /* USER CODE END WKUPType USART4 */
+
+  LL_USART_Enable(USART4);
+
+  /* Polling USART4 initialisation */
+  while ((!(LL_USART_IsActiveFlag_TEACK(USART4))) || (!(LL_USART_IsActiveFlag_REACK(USART4)))) {
   }
   /* USER CODE BEGIN USART4_Init 2 */
 
@@ -187,20 +220,30 @@ static void MX_USART4_UART_Init(void) {
  * @retval None
  */
 static void MX_GPIO_Init(void) {
-  GPIO_InitTypeDef GPIO_InitStruct = { 0 };
+  LL_GPIO_InitTypeDef GPIO_InitStruct = { 0 };
 
   /* GPIO Ports Clock Enable */
-  __HAL_RCC_GPIOA_CLK_ENABLE();
+  LL_IOP_GRP1_EnableClock(LL_IOP_GRP1_PERIPH_GPIOA);
 
-  /*Configure GPIO pin : FORCE_BL_Pin */
+  /**/
   GPIO_InitStruct.Pin = FORCE_BL_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = GPIO_PULLUP;
-  HAL_GPIO_Init(FORCE_BL_GPIO_Port, &GPIO_InitStruct);
+  GPIO_InitStruct.Mode = LL_GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = LL_GPIO_PULL_UP;
+  LL_GPIO_Init(FORCE_BL_GPIO_Port, &GPIO_InitStruct);
 
 }
 
 /* USER CODE BEGIN 4 */
+static void MX_GPIO_DeInit(void) {
+  LL_GPIO_InitTypeDef GPIO_InitStruct = { 0 };
+
+  GPIO_InitStruct.Pin = FORCE_BL_Pin;
+  GPIO_InitStruct.Mode = LL_GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = LL_GPIO_PULL_NO;
+  LL_GPIO_Init(FORCE_BL_GPIO_Port, &GPIO_InitStruct);
+
+  LL_IOP_GRP1_DisableClock(LL_IOP_GRP1_PERIPH_GPIOA);
+}
 
 /* USER CODE END 4 */
 

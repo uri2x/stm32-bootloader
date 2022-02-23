@@ -24,7 +24,7 @@ typedef enum {
 } bl_state;
 
 /* Private define ------------------------------------------------------------*/
-#define APP_ADDRESS 0x8003000
+#define APP_ADDRESS 0x8002000
 #define BOOTLOADER_TIMEOUT_SECONDS 30
 
 #define BL_COMMAND_ACK 0x79
@@ -54,7 +54,7 @@ static void bootloader_reset_state(void);
 static void bootloader_parse_command(uint8_t command);
 static void USART_CharReception_Callback(uint8_t ch);
 
-static UART_HandleTypeDef *bootloader_uart;
+static USART_TypeDef *bootloader_uart;
 
 static HAL_StatusTypeDef bootloader_erase_page(uint16_t pageNumber) {
   FLASH_EraseInitTypeDef eraseInitStruct;
@@ -76,7 +76,7 @@ static void bootloader_go(uint32_t address) {
   typedef void (*Function_Pointer)(void);
   Function_Pointer jump_to_address;
 
-  HAL_UART_DeInit(bootloader_uart);
+  LL_USART_Disable(bootloader_uart);
   HAL_RCC_DeInit();
   HAL_DeInit();
 
@@ -112,8 +112,14 @@ static void bootloader_reset_state(void) {
 }
 
 static uint8_t bootloader_get_uint8(void) {
-  uint8_t ch;
-  HAL_UART_Receive(bootloader_uart, &ch, 1, 10000);
+  uint8_t ch = 0;
+  uint32_t timeout = HAL_GetTick() + 1000;
+  while (HAL_GetTick() < timeout) {
+    if (LL_USART_IsActiveFlag_RXNE_RXFNE(bootloader_uart)) {
+      ch = LL_USART_ReceiveData8(bootloader_uart);
+      break;
+    }
+  }
   rxChecksum ^= ch;
   return ch;
 }
@@ -135,7 +141,8 @@ static uint32_t bootloader_get_uint32(void) {
 }
 
 static void bootloader_uart_send(uint8_t ch) {
-  HAL_UART_Transmit(bootloader_uart, &ch, 1, 10000);
+  while (!LL_USART_IsActiveFlag_TXE_TXFNF(bootloader_uart));
+  LL_USART_TransmitData9(bootloader_uart, ch);
 }
 
 static void bootloader_send_char(uint8_t ch) {
@@ -182,7 +189,7 @@ static void bootloader_command_get(void) {
   bootloader_send_char(BL_COMMAND_READOUT_PROTECT);
   bootloader_send_char(BL_COMMAND_READOUT_UNPROTECT);
   bootloader_end_buffer();
-  //bootloader_send_ack();
+  bootloader_send_ack();
 
   bootloader_reset_state();
 }
@@ -194,8 +201,7 @@ static void bootloader_command_get_id(void) {
   bootloader_send_char(1); // Number of bytes to follow
   bootloader_send_char(devID >> 0x08);
   bootloader_send_char(devID & 0xFF);
-  bootloader_end_buffer();
-  //bootloader_send_ack();
+  bootloader_send_ack();
 
   bootloader_reset_state();
 }
@@ -434,7 +440,7 @@ static void USART_CharReception_Callback(uint8_t ch) {
   }
 }
 
-void bootloader_loop(UART_HandleTypeDef *uart) {
+void bootloader_loop(USART_TypeDef *uart) {
   bootloader_uart = uart;
   bootloader_reset_state();
 
@@ -444,12 +450,16 @@ void bootloader_loop(UART_HandleTypeDef *uart) {
 
   uint32_t lastAction = HAL_GetTick();
   while (HAL_GetTick() < lastAction + (BOOTLOADER_TIMEOUT_SECONDS * 1000)) {
-    uint8_t ch;
-    if (HAL_UART_Receive(bootloader_uart, &ch, 1, 5000) == HAL_OK) {
-      lastAction = HAL_GetTick();
-      USART_CharReception_Callback(ch);
-    } else {
-      bootloader_reset_state();
+    uint32_t targetTick = HAL_GetTick() + 5000;
+    while (HAL_GetTick() < targetTick) {
+      if (LL_USART_IsActiveFlag_RXNE_RXFNE(bootloader_uart)) {
+        uint8_t ch = LL_USART_ReceiveData8(bootloader_uart);
+        lastAction = HAL_GetTick();
+        USART_CharReception_Callback(ch);
+        targetTick = HAL_GetTick() + 5000;
+      }
     }
+
+    bootloader_reset_state();
   }
 }

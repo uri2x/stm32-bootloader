@@ -169,7 +169,7 @@ static void bootloader_command_get(void) {
   bootloader_send_ack();
   bootloader_start_buffer();
   bootloader_send_char(11); // Number of bytes to follow
-  bootloader_send_char(0x33); // Bootloader version
+  bootloader_send_char(0x31); // Bootloader version
   bootloader_send_char(BL_COMMAND_GET);
   bootloader_send_char(BL_COMMAND_GET_VERSION_AND_READ_PROTECTION);
   bootloader_send_char(BL_COMMAND_GET_ID);
@@ -409,6 +409,10 @@ static void bootloader_parse_command(uint8_t command) {
   }
 }
 
+void bootloader_start_user_program(void) {
+  bootloader_go(APP_ADDRESS);
+}
+
 static void USART_CharReception_Callback(uint8_t ch) {
   rxChecksum ^= ch;
   switch (blState) {
@@ -428,10 +432,6 @@ static void USART_CharReception_Callback(uint8_t ch) {
       bootloader_parse_command(rxCmd);
       break;
   }
-}
-
-void bootloader_start_user_program(void) {
-  bootloader_go(APP_ADDRESS);
 }
 
 void bootloader_loop(UART_HandleTypeDef *uart) {

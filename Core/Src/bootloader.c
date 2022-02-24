@@ -13,17 +13,14 @@
  *
  ******************************************************************************
  */
-/* USER CODE END Header */
-/* Includes ------------------------------------------------------------------*/
+
 #include "main.h"
 #include "stm32g0xx_hal.h"
 
-/* Private typedef -----------------------------------------------------------*/
 typedef enum {
   bsIdle, bsWaitCommand2
 } bl_state;
 
-/* Private define ------------------------------------------------------------*/
 #define APP_ADDRESS 0x8002000
 #define BOOTLOADER_TIMEOUT_SECONDS 30
 
@@ -54,7 +51,7 @@ static void bootloader_reset_state(void);
 static void bootloader_parse_command(uint8_t command);
 static void USART_CharReception_Callback(uint8_t ch);
 
-static USART_TypeDef *bootloader_uart;
+static USART_TypeDef *bootloader_uart = NULL;
 
 static HAL_StatusTypeDef bootloader_erase_page(uint16_t pageNumber) {
   FLASH_EraseInitTypeDef eraseInitStruct;
@@ -68,34 +65,33 @@ static HAL_StatusTypeDef bootloader_erase_page(uint16_t pageNumber) {
   return HAL_FLASHEx_Erase(&eraseInitStruct, &pageError);
 }
 
-/* USER CODE BEGIN 4 */
 static void bootloader_go(uint32_t address) {
-  uint32_t stackAddress = *(__IO uint32_t*) address;
-  uint32_t appAddress = address + 4U;
+#define C_JUMP 1
 
-  typedef void (*Function_Pointer)(void);
-  Function_Pointer jump_to_address;
-
-  LL_USART_Disable(bootloader_uart);
+  if (bootloader_uart)
+    LL_USART_Disable(bootloader_uart);
   HAL_RCC_DeInit();
   HAL_DeInit();
 
   SysTick->CTRL = 0;
   SysTick->LOAD = 0;
   SysTick->VAL = 0;
+  SCB->ICSR |= SCB_ICSR_PENDSTCLR_Msk;
 
-  __enable_irq();
-  if (1) {
+  SCB->VTOR = address;
 
-    jump_to_address = (Function_Pointer) (*(__IO uint32_t*) (appAddress));
+  uint32_t stackAddress = *(__IO uint32_t*) address;
+  uint32_t appAddress = *(__IO uint32_t*) (address + 4U);
+#if (C_JUMP)
+  typedef void (*Function_Pointer)(void);
+  Function_Pointer jump_to_address = (Function_Pointer) (appAddress);
 
-    __set_MSP(stackAddress);
+  __set_MSP(stackAddress);
 
-    jump_to_address();
-  } else {
-
-    asm("msr msp, %0; bx %1;" : : "r"(stackAddress), "r"(appAddress));
-  }
+  jump_to_address();
+#else
+  asm("msr MSP, %0; blx %1;" : : "r"(stackAddress), "r"(appAddress) :);
+#endif
 }
 
 static uint32_t bootloader_get_page(uint32_t address) {
@@ -141,7 +137,8 @@ static uint32_t bootloader_get_uint32(void) {
 }
 
 static void bootloader_uart_send(uint8_t ch) {
-  while (!LL_USART_IsActiveFlag_TXE_TXFNF(bootloader_uart));
+  while (!LL_USART_IsActiveFlag_TXE_TXFNF(bootloader_uart))
+    ;
   LL_USART_TransmitData9(bootloader_uart, ch);
 }
 
